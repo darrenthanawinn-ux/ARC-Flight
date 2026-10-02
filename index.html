@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>ARC-FLIGHT: Powered Armor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+body{margin:0;overflow:hidden;background:#05060d;font-family:'Segoe UI',system-ui,sans-serif;user-select:none}canvas{display:block}
+.holo{background:rgba(6,20,36,.72);border:1px solid rgba(80,220,255,.45);box-shadow:0 0 24px rgba(40,200,255,.22) inset,0 0 18px rgba(40,200,255,.18);backdrop-filter:blur(6px);color:#cdf6ff}
+.bar{height:8px;background:#0a1824;border:1px solid #1d4a63}.bar>i{display:block;height:100%;width:100%}
+.brk{position:absolute;border:1px solid rgba(255,120,120,.7);transform:translate(-50%,-50%);font-size:10px;color:#ff9a9a;text-align:center}
+.card{transition:transform .15s,box-shadow .15s}.card:hover{transform:translateY(-6px);box-shadow:0 0 30px rgba(80,220,255,.5)}
+</style></head>
+<body>
+<div id="hud" class="fixed inset-0 pointer-events-none hidden">
+ <div class="holo absolute top-4 left-4 p-3 w-64 text-sm">
+  <div id="suitName" class="font-bold text-cyan-300"></div><div id="status" class="text-xs opacity-70"></div>
+  <div class="mt-2 text-xs">ARMOR</div><div class="bar"><i id="bHp" style="background:#ff5a4a"></i></div>
+  <div class="mt-1 text-xs">SHIELD</div><div class="bar"><i id="bSh" style="background:#4ad0ff"></i></div>
+  <div class="mt-1 text-xs">ENERGY</div><div class="bar"><i id="bEn" style="background:#ffd24a"></i></div>
+  <div id="cr" class="mt-2 text-xs"></div>
+ </div>
+ <div id="telem" class="holo absolute top-4 right-4 p-3 text-right text-sm leading-6"></div>
+ <div id="quest" class="holo absolute bottom-4 left-4 p-3 text-xs w-64"></div>
+ <div class="holo absolute bottom-4 right-4 p-3 text-xs leading-5">WASD thrust &middot; Space/X up/down &middot; Shift boost<br>Mouse aim &middot; LMB/Q repulsors &middot; RMB/F unibeam<br>C suits &middot; E interact</div>
+ <div id="prompt" class="absolute bottom-32 w-full text-center text-cyan-200 text-lg hidden"></div>
+ <div id="msg" class="absolute top-24 w-full text-center text-2xl font-bold text-cyan-200 opacity-0 transition-opacity duration-500"></div>
+ <div class="absolute left-1/2 top-1/2 w-4 h-4 border border-cyan-300/80 rounded-full" style="transform:translate(-50%,-50%)"></div>
+</div>
+<div id="flash" class="fixed inset-0 bg-white pointer-events-none" style="opacity:0;transition:opacity .8s"></div>
+<div id="dlg" class="holo fixed bottom-40 left-1/2 hidden p-4 w-[34rem] max-w-[92vw]" style="transform:translateX(-50%)"></div>
+<div id="menu" class="fixed inset-0 hidden items-center justify-center flex-col gap-6" style="background:rgba(2,8,18,.55)">
+ <div class="text-3xl font-bold text-cyan-300 tracking-wide">SUIT DEPLOYMENT</div>
+ <div id="cards" class="flex gap-5 flex-wrap justify-center px-4"></div>
+ <div class="text-cyan-100/70 text-sm">Click a suit or press 1&ndash;3 &middot; C to close</div>
+</div>
+<div id="start" class="fixed inset-0 flex items-center justify-center flex-col gap-4 text-center" style="background:radial-gradient(#10243a,#03050c)">
+ <div class="text-5xl font-bold text-cyan-300">ARC-FLIGHT</div>
+ <div class="text-cyan-100/80">Powered-armor patrol over Neo-Meridian. Land beside a gold beacon to take bounties.</div>
+ <button id="go" class="holo px-8 py-3 text-xl hover:bg-cyan-900/60">Click to deploy</button>
+ <div class="text-xs text-cyan-100/60">WASD thrust &middot; Space/X up/down &middot; Shift afterburner &middot; Mouse aim &middot; LMB or Q repulsors &middot; RMB or F unibeam &middot; C suit menu &middot; E talk</div>
+</div>
+<script>
+const $=i=>document.getElementById(i),R=Math.random,V=(x=0,y=0,z=0)=>new THREE.Vector3(x,y,z),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x070816);scene.fog=new THREE.FogExp2(0x0b0d26,.0017);
+const cam=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.5,4000);
+scene.add(new THREE.HemisphereLight(0x7a9cff,0x2a1040,.8));
+const sun=new THREE.DirectionalLight(0xc4d6ff,.9);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-280,right:280,top:280,bottom:-280,near:1,far:1000});scene.add(sun,sun.target);
+// particle skybox
+{const n=3500,p=new Float32Array(n*3),c=new Float32Array(n*3);for(let i=0;i<n;i++){const v=V(R()-.5,R()-.3,R()-.5).normalize().multiplyScalar(2500);p.set([v.x,v.y,v.z],i*3);const k=new THREE.Color().setHSL(R()<.3?.9:.58,.6,.5+R()*.5);c.set([k.r,k.g,k.b],i*3)}
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));g.setAttribute('color',new THREE.BufferAttribute(c,3));
+ var stars=new THREE.Points(g,new THREE.PointsMaterial({size:3,sizeAttenuation:false,vertexColors:true,fog:false}));scene.add(stars)}
+// city
+const cv=document.createElement('canvas');cv.width=cv.height=128;const cx=cv.getContext('2d');cx.fillStyle='#000';cx.fillRect(0,0,128,128);
+for(let r=0;r<4;r++)for(let c=0;c<4;c++)if(R()<.5){cx.fillStyle=['#ffd98a','#8be9ff','#ff7ad9','#fff'][R()*4|0];cx.fillRect(c*32+6,r*32+8,20,16)}
+const tex=new THREE.CanvasTexture(cv);tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+const P=[],N=[],U=[],C=[],I=[];let off=0;
+function addBox(x,z,w,h,d,col){const g=new THREE.BoxGeometry(w,h,d),p=g.attributes.position,n=g.attributes.normal,u=g.attributes.uv;
+ for(let i=0;i<p.count;i++){const top=Math.abs(n.getY(i))>.5;P.push(p.getX(i)+x,p.getY(i)+h/2,p.getZ(i)+z);N.push(n.getX(i),n.getY(i),n.getZ(i));
+  U.push(top?.01:u.getX(i)*(Math.abs(n.getX(i))>.5?d:w)/10,top?.01:u.getY(i)*h/12);C.push(col.r,col.g,col.b)}
+ g.index.array.forEach(k=>I.push(k+off));off+=p.count}
+const bm={},bl=[],neon=[];
+for(let i=-13;i<=13;i++)for(let j=-13;j<=13;j++){if(Math.abs(i)<2&&Math.abs(j)<2||R()<.12)continue;
+ const dist=Math.hypot(i,j)/13,w=22+R()*18,d=22+R()*18,h=25+Math.pow(R(),2)*230*(1.2-dist*.7)+(R()<.06?150:0),x=i*60+(R()-.5)*6,z=j*60+(R()-.5)*6;
+ addBox(x,z,w,h,d,new THREE.Color().setHSL(.6+R()*.15,.3,.12+R()*.1));const b={x,z,hw:w/2,hd:d/2,h};bm[i+','+j]=b;bl.push(b);if(R()<.7)neon.push(b)}
+{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(P,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(N,3));
+ g.setAttribute('uv',new THREE.Float32BufferAttribute(U,2));g.setAttribute('color',new THREE.Float32BufferAttribute(C,3));g.setIndex(I);
+ const m=new THREE.Mesh(g,new THREE.MeshStandardMaterial({vertexColors:true,emissive:0xffffff,emissiveMap:tex,emissiveIntensity:1.1,roughness:.6,metalness:.3}));m.castShadow=m.receiveShadow=true;scene.add(m);
+ const nm=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshBasicMaterial(),neon.length),o=new THREE.Object3D();
+ neon.forEach((b,k)=>{o.position.set(b.x,b.h+.6,b.z);o.scale.set(b.hw*2+1,1.2,b.hd*2+1);o.updateMatrix();nm.setMatrixAt(k,o.matrix);nm.setColorAt(k,new THREE.Color([0x18e6ff,0xff2fd0,0xffb020][R()*3|0]))});scene.add(nm)}
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(2400,2400),new THREE.MeshStandardMaterial({color:0x080a16,roughness:.9}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+const grid=new THREE.GridHelper(1620,27,0x1fb8d8,0x1fb8d8);grid.position.y=.2;grid.material.opacity=.35;grid.material.transparent=true;scene.add(grid);
+{const pad=new THREE.Mesh(new THREE.CylinderGeometry(34,34,.6,48),new THREE.MeshBasicMaterial({color:0x0a3a4a}));pad.position.y=.3;scene.add(pad);
+ const ring=new THREE.Mesh(new THREE.TorusGeometry(30,.5,8,64),new THREE.MeshBasicMaterial({color:0x40f0ff}));ring.rotation.x=Math.PI/2;ring.position.y=.8;scene.add(ring)}
+const bAt=(x,z)=>bm[Math.round(x/60)+','+Math.round(z/60)];
+function hitB(p,r=0){for(let a=-1;a<=1;a++)for(let c=-1;c<=1;c++){const b=bm[(Math.round(p.x/60)+a)+','+(Math.round(p.z/60)+c)];
+ if(b&&p.y<b.h+r&&Math.abs(p.x-b.x)<b.hw+r&&Math.abs(p.z-b.z)<b.hd+r)return b}return null}
+// suits
+const SUITS=[
+{n:'MARK I HEAVY ASSAULT',c:0xb3121a,a:0xffc233,hp:170,sh:80,spd:95,acc:55,boost:1.9,regen:14,dmg:16,rate:.16,beam:1.6,stealth:1,d:'Armored tank. Slow, heavy beam damage.'},
+{n:'STEALTH STRIDER',c:0x1a2433,a:0x32e6d1,hp:100,sh:60,spd:120,acc:70,boost:2.1,regen:24,dmg:11,rate:.11,beam:1,stealth:.4,d:'Low signature. Enemies notice you late.'},
+{n:'HYPER-VELOCITY INTERCEPTOR',c:0x1f56d8,a:0xf2f6ff,hp:80,sh:50,spd:150,acc:95,boost:2.7,regen:18,dmg:8,rate:.07,beam:.8,stealth:1,d:'Fastest frame. Rapid-fire repulsors.'}];
+function makeSuit(s){const body=new THREE.Group(),arms=new THREE.Group(),
+ m=new THREE.MeshStandardMaterial({color:s.c,metalness:.8,roughness:.3}),a=new THREE.MeshStandardMaterial({color:s.a,metalness:.8,roughness:.3,emissive:s.a,emissiveIntensity:.2}),
+ gl=new THREE.MeshBasicMaterial({color:0xb0f6ff}),fire=new THREE.MeshBasicMaterial({color:0xffa040}),palms=[],feet=[];
+ const add=(geo,mat,x,y,z,par=body)=>{const o=new THREE.Mesh(geo,mat);o.position.set(x,y,z);o.castShadow=true;par.add(o);return o};
+ add(new THREE.BoxGeometry(1.7,2,1),m,0,0,0);add(new THREE.BoxGeometry(1.2,.5,.1),a,0,.6,-.52);
+ const rc=add(new THREE.CylinderGeometry(.3,.3,.1,16),gl,0,.2,-.53);rc.rotation.x=Math.PI/2;
+ add(new THREE.BoxGeometry(.85,.9,.9),a,0,1.55,0);add(new THREE.BoxGeometry(.6,.15,.1),gl,0,1.6,-.46);
+ [-1,1].forEach(sx=>{add(new THREE.SphereGeometry(.5,10,10),a,sx*1.1,.9,0);add(new THREE.BoxGeometry(.45,.45,1.6),m,sx*1.1,0,-.8,arms);palms.push(add(new THREE.SphereGeometry(.34,10,10),gl,sx*1.1,0,-1.7,arms));
+  add(new THREE.BoxGeometry(.6,1.8,.6),m,sx*.45,-1.9,0);add(new THREE.BoxGeometry(.7,.4,.9),a,sx*.45,-2.9,-.1);
+  const t=add(new THREE.ConeGeometry(.3,.8,8),fire,sx*.45,-3.4,-.1);t.rotation.x=Math.PI;feet.push(t)});
+ arms.position.y=.5;body.add(arms);body.userData={palms,feet,arms};return body}
+const state={run:0,menu:0},pl={p:V(0,60,100),v:V(),yaw:0,pitch:0,roll:0,hp:100,sh:50,en:100,hit:0,over:0,alt:0,fire:0,sum:1,body:null,suit:0,credits:0,boost:0,beam:0},
+ obj=new THREE.Group(),ring=new THREE.Mesh(new THREE.TorusGeometry(1,.08,8,48),new THREE.MeshBasicMaterial({transparent:true,blending:THREE.AdditiveBlending}));
+scene.add(obj,ring);ring.visible=false;let S=SUITS[0];
+function summon(i,first){pl.suit=i;S=SUITS[i];if(pl.body)obj.remove(pl.body);pl.body=makeSuit(S);obj.add(pl.body);
+ pl.hp=S.hp;pl.sh=S.sh;pl.en=100;pl.over=0;pl.sum=0;ring.material.color.set(S.a);ring.visible=true;ring.position.copy(pl.p);ring.rotation.x=Math.PI/2;
+ for(let k=0;k<80;k++)emit(pl.p,V(R()-.5,R()-.5,R()-.5).normalize().multiplyScalar(20+R()*40),new THREE.Color(S.a),.8);
+ const f=$('flash');f.style.transition='none';f.style.opacity=.8;setTimeout(()=>{f.style.transition='opacity .8s';f.style.opacity=0},30);
+ $('suitName').textContent=S.n;if(!first)msg('SUIT DEPLOYED: '+S.n);renderCards()}
+// particles
+const MP=1800,pp=new Float32Array(MP*3),pc=new Float32Array(MP*3),pb=new Float32Array(MP*3),pv=new Float32Array(MP*3),pt=new Float32Array(MP),pm=new Float32Array(MP).fill(1);let pi=0;
+const pg=new THREE.BufferGeometry();pg.setAttribute('position',new THREE.BufferAttribute(pp,3));pg.setAttribute('color',new THREE.BufferAttribute(pc,3));
+const pts=new THREE.Points(pg,new THREE.PointsMaterial({size:3,vertexColors:true,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));pts.frustumCulled=false;scene.add(pts);
+function emit(p,v,c,life){const i=pi++%MP;pp.set([p.x,p.y,p.z],i*3);pv.set([v.x,v.y,v.z],i*3);pb.set([c.r,c.g,c.b],i*3);pt[i]=pm[i]=life}
+function boom(p,hex,n){const c=new THREE.Color(hex);for(let i=0;i<n;i++)emit(p,V(R()-.5,R()-.5,R()-.5).normalize().multiplyScalar(10+R()*50),c,.4+R()*.5)}
+function stepP(dt){for(let i=0;i<MP;i++){if(pt[i]<=0){pc[i*3]=pc[i*3+1]=pc[i*3+2]=0;continue}pt[i]-=dt;const f=Math.max(0,pt[i]/pm[i]);
+ for(let k=0;k<3;k++){pp[i*3+k]+=pv[i*3+k]*dt;pv[i*3+k]*=.97;pc[i*3+k]=pb[i*3+k]*f}}pg.attributes.position.needsUpdate=pg.attributes.color.needsUpdate=true}
+// combat objects
+const bG=new THREE.BoxGeometry(.3,.3,2.6),sG=new THREE.SphereGeometry(.7,8,8),bP=new THREE.MeshBasicMaterial({color:0x7ff0ff}),bE=new THREE.MeshBasicMaterial({color:0xff6a30});
+let bul=[],en=[],lock=null;
+function spawnB(p,dir,f,d){const m=new THREE.Mesh(f?bG:sG,f?bP:bE);m.position.copy(p);if(f)m.lookAt(p.clone().add(dir));scene.add(m);bul.push({m,v:dir.clone().multiplyScalar(f?340:90),f,d,l:f?2:5})}
+const beam=new THREE.Mesh(new THREE.CylinderGeometry(.7,.7,1,12,1,true).rotateX(Math.PI/2).translate(0,0,.5),new THREE.MeshBasicMaterial({color:0xaef4ff,transparent:true,opacity:.75,blending:THREE.AdditiveBlending,side:THREE.DoubleSide}));beam.visible=false;scene.add(beam);
+function mkEnemy(type,pos){const dr=type=='drone',g=new THREE.Group(),mat=new THREE.MeshStandardMaterial({color:dr?0x3a0a12:0x22262e,emissive:dr?0xff2040:0xff7a18,emissiveIntensity:.6,metalness:.7,roughness:.4}),
+ b=new THREE.Mesh(dr?new THREE.OctahedronGeometry(1.5):new THREE.BoxGeometry(4,2.6,4),mat),e=new THREE.Mesh(new THREE.SphereGeometry(dr?.4:.7,8,8),new THREE.MeshBasicMaterial({color:0xff3050}));
+ b.castShadow=true;e.position.z=dr?1.3:2;g.add(b,e);if(!dr)[-2.8,2.8].forEach(x=>{const c=new THREE.Mesh(new THREE.BoxGeometry(.8,.8,3),mat);c.position.set(x,.6,1);g.add(c)});
+ g.position.copy(pos);scene.add(g);en.push({g,p:g.position,v:V(),hp:dr?30:130,r:dr?1.8:3.4,t:type,sp:dr?60:30,pref:dr?70:120,f:1+R()*2,w:pos.clone(),ph:R()*6})}
+function swarm(n,type){const a=R()*6.28,d=350+R()*150,c=V(pl.p.x+Math.cos(a)*d,40+R()*120,pl.p.z+Math.sin(a)*d);for(let i=0;i<n;i++)mkEnemy(type,c.clone().add(V((R()-.5)*30,(R()-.5)*20,(R()-.5)*30)))}
+let quest=null;
+function dmgE(e,d){if(e.dead)return;e.hp-=d;if(e.hp<=0){e.dead=1;boom(e.p,0xff8a2a,50);scene.remove(e.g);pl.credits+=e.t=='mech'?80:25;
+ if(quest&&!quest.done&&quest.type==e.t&&++quest.have>=quest.need){quest.done=1;msg('BOUNTY COMPLETE - return to '+quest.giver.n)}}}
+function hurt(d){pl.hit=0;if(pl.sh>0){const a=Math.min(pl.sh,d);pl.sh-=a;d-=a}pl.hp-=d;
+ if(pl.hp<=0){boom(pl.p,0xff5030,80);msg('ARMOR BREACH - REDEPLOYING');pl.credits=Math.max(0,pl.credits-100);pl.p.set(0,70,100);pl.v.set(0,0,0);bul=bul.filter(b=>b.f||(scene.remove(b.m),0));summon(pl.suit,1)}}
+// NPCs
+const NPCS=[{n:'Dr. Imani Okoro',t:'Rogue drones are chewing through the power grid. Thin them out.',type:'drone',need:6,rew:500},
+{n:'Cmdr. Vega',t:'Security mechs have gone hostile. Take two of them down.',type:'mech',need:2,rew:900},
+{n:'Jax "Static"',t:'Got a bounty on a drone swarm. Ten hunters, clean kills.',type:'drone',need:10,rew:800},
+{n:'Mother Lin',t:'My rooftop garden keeps getting buzzed. Four drones, please.',type:'drone',need:4,rew:350},
+{n:'ARIA-7',t:'Dispatch here. Three mechs spotted near the financial towers.',type:'mech',need:3,rew:1300}];
+{const tall=bl.filter(b=>b.h>90).sort(()=>R()-.5),pick=[];for(const b of tall){if(pick.length<5&&pick.every(q=>Math.hypot(q.x-b.x,q.z-b.z)>250))pick.push(b)}
+ pick.forEach((b,i)=>{const n=NPCS[i],g=new THREE.Group(),r=Math.max(4,Math.min(6,Math.min(b.hw,b.hd)-1));
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(r,r,.5,24),new THREE.MeshBasicMaterial({color:0xffc233})));
+  const body=new THREE.Mesh(new THREE.CylinderGeometry(.6,.7,1.8,10),new THREE.MeshStandardMaterial({color:0x5a6a90}));body.position.y=1.4;body.castShadow=true;
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.5,10,10),new THREE.MeshStandardMaterial({color:0xe0b090}));head.position.y=2.7;
+  const bc=new THREE.Mesh(new THREE.CylinderGeometry(.5,.5,90,10,1,true),new THREE.MeshBasicMaterial({color:0xffc233,transparent:true,opacity:.35,blending:THREE.AdditiveBlending}));bc.position.y=45;
+  g.add(body,head,bc);g.position.set(b.x,b.h+.3,b.z);scene.add(g);n.pos=g.position.clone().add(V(0,2,0))})
+ NPCS.length=pick.length}
+// input
+const k={};let mx=0,my=0,fireM=0,beamM=0,near=null;
+addEventListener('keydown',e=>{k[e.code]=1;if(['Space','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();if(!state.run)return;
+ if(e.code=='KeyC')toggleMenu();if(state.menu&&/Digit[1-3]/.test(e.code))pick(+e.code[5]-1);if(e.code=='KeyE')interact()});
+addEventListener('keyup',e=>k[e.code]=0);
+addEventListener('mousemove',e=>{if(document.pointerLockElement){mx+=e.movementX;my+=e.movementY}});
+addEventListener('mousedown',e=>{if(!state.run||state.menu)return;if(!document.pointerLockElement)return renderer.domElement.requestPointerLock();if(e.button==0)fireM=1;if(e.button==2)beamM=1});
+addEventListener('mouseup',e=>{if(e.button==0)fireM=0;if(e.button==2)beamM=0});addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+$('go').onclick=()=>{$('start').style.display='none';$('hud').classList.remove('hidden');state.run=1;renderer.domElement.requestPointerLock();summon(0,1);msg('SYSTEMS ONLINE');
+ for(let i=0;i<2;i++)swarm(4,'drone');swarm(1,'mech');requestAnimationFrame(loop)};
+function toggleMenu(){state.menu=!state.menu;$('menu').style.display=state.menu?'flex':'none';if(state.menu){document.exitPointerLock();fireM=beamM=0}else renderer.domElement.requestPointerLock()}
+function pick(i){summon(i);toggleMenu()}
+function renderCards(){$('cards').innerHTML=SUITS.map((s,i)=>`<button class="card holo p-4 w-64 text-left" style="${i==pl.suit?'border-color:#ffd24a':''}" onclick="pick(${i})"><div class="font-bold" style="color:#${s.a.toString(16).padStart(6,'0')}">${i+1}. ${s.n}</div><div class="text-xs my-2 opacity-80">${s.d}</div><div class="text-xs leading-5">Armor ${s.hp} &middot; Shield ${s.sh}<br>Speed ${s.spd} &middot; Afterburner x${s.boost}<br>Repulsor ${s.dmg} dmg &middot; Beam x${s.beam}</div></button>`).join('')}
+let mt;function msg(t){const m=$('msg');m.textContent=t;m.style.opacity=1;clearTimeout(mt);mt=setTimeout(()=>m.style.opacity=0,2500)}
+function interact(){const d=$('dlg');if(d.style.display=='block'){d.style.display='none';return}if(!near)return;let t;
+ if(quest&&quest.giver===near&&quest.done){pl.credits+=quest.rew;t=`Payment sent: ${quest.rew} credits. Come back for more work.`;quest=null}
+ else if(quest)t=quest.giver===near?`Still ${quest.need-quest.have} ${quest.type}s to go.`:'Finish your current bounty first.';
+ else{quest={giver:near,type:near.type,need:near.need,have:0,rew:near.rew};t=near.t+` (Bounty: ${near.need} ${near.type}s for ${near.rew} credits)`}
+ d.innerHTML=`<div class="font-bold text-amber-300">${near.n}</div><div class="my-2">${t}</div><div class="text-xs opacity-60">[E] close</div>`;d.style.display='block'}
+// main loop
+const tmp=V(),qA=new THREE.Quaternion(),eu=new THREE.Euler(0,0,0,'YXZ'),brk=[];let T=0,last=performance.now(),fT=0,spT=0;
+for(let i=0;i<16;i++){const d=document.createElement('div');d.className='brk';d.style.display='none';$('hud').appendChild(d);brk.push(d)}
+function loop(now){requestAnimationFrame(loop);let dt=Math.min(.05,(now-last)/1000);last=now;if(state.menu)dt*=.08;T+=dt;
+ const boost=(k.ShiftLeft||k.ShiftRight)&&pl.en>0&&!pl.over,mxs=S.spd*(boost?S.boost:1);pl.boost=boost;
+ // look
+ pl.yaw-=mx*.0022+(k.ArrowRight-k.ArrowLeft||0)*1.8*dt;pl.pitch=clamp(pl.pitch-my*.0022+((k.ArrowUp||0)-(k.ArrowDown||0))*1.2*dt,-1.45,1.45);const yawRate=mx;mx=my=0;
+ eu.set(pl.pitch,pl.yaw,0);qA.setFromEuler(eu);const fwd=V(0,0,-1).applyQuaternion(qA),right=V(1,0,0).applyQuaternion(qA);
+ // thrust
+ const in_=V(),sx=(k.KeyD||0)-(k.KeyA||0);in_.addScaledVector(fwd,(k.KeyW||0)-(k.KeyS||0)).addScaledVector(right,sx);in_.y+=(k.Space||0)-(k.KeyX||0);
+ const thrust=in_.lengthSq()>0;if(thrust)pl.v.addScaledVector(in_.normalize(),mxs*S.acc/50*dt*2);if(boost&&!thrust)pl.v.addScaledVector(fwd,mxs*dt*2);
+ pl.v.multiplyScalar(Math.exp(-(thrust||boost?.35:1.5)*dt));if(pl.v.length()>mxs)pl.v.setLength(mxs);
+ pl.p.addScaledVector(pl.v,dt);if(pl.p.y<3){pl.p.y=3;pl.v.y=Math.max(0,pl.v.y)}
+ {const b=hitB(pl.p,2.5);if(b){const px=b.hw+2.5-Math.abs(pl.p.x-b.x),pz=b.hd+2.5-Math.abs(pl.p.z-b.z),py=b.h+2.5-pl.p.y;
+  if(py<=Math.min(px,pz)){pl.p.y=b.h+2.5;pl.v.y=Math.max(0,pl.v.y)}else if(px<pz){pl.p.x+=Math.sign(pl.p.x-b.x)*px;pl.v.x*=-.3}else{pl.p.z+=Math.sign(pl.p.z-b.z)*pz;pl.v.z*=-.3}}}
+ // energy/weapons
+ const ui=state.menu?0:1,wantBeam=ui&&(beamM||k.KeyF)&&pl.en>2&&!pl.over,wantFire=ui&&(fireM||k.KeyQ)&&!wantBeam&&pl.en>1&&!pl.over;
+ pl.en-=(boost?18:0)*dt+(wantBeam?30:0)*dt;if(!boost&&!wantBeam)pl.en+=S.regen*dt;pl.en=clamp(pl.en,0,100);if(pl.en<=0)pl.over=1;if(pl.over&&pl.en>20)pl.over=0;
+ pl.hit+=dt;if(pl.hit>4&&pl.sh<S.sh)pl.sh=Math.min(S.sh,pl.sh+12*dt);else if(pl.sh>=S.sh)pl.hp=Math.min(S.hp,pl.hp+3*dt);
+ // model
+ const sp=pl.v.length();obj.position.copy(pl.p);pl.roll+=(clamp(-yawRate*.03-sx*.5,-1,1)-pl.roll)*Math.min(1,dt*4);obj.rotation.set(pl.pitch,pl.yaw,pl.roll,'YXZ');
+ const bd=pl.body,ud=bd.userData;bd.rotation.x=-(.08+.6*sp/mxs);ud.arms.rotation.x=-bd.rotation.x;
+ if(pl.sum<1){pl.sum=Math.min(1,pl.sum+dt/.9);const t=pl.sum-1,s=1+2.7*t*t*t+1.7*t*t;bd.scale.setScalar(Math.max(.01,s));ring.scale.setScalar(1+pl.sum*30);ring.material.opacity=1-pl.sum;ring.position.copy(pl.p);if(pl.sum>=1)ring.visible=false}
+ obj.updateMatrixWorld(true);
+ const col=new THREE.Color(boost?0x7fd0ff:0xff9a40);ud.feet.forEach(f=>{f.getWorldPosition(tmp);for(let i=0;i<(boost?3:1);i++)emit(tmp,V((R()-.5)*6,-12-R()*12,(R()-.5)*6).add(pl.v.clone().multiplyScalar(.5)),col,boost?.55:.25)});
+ // aim + lock
+ if(lock&&(lock.dead||lock.p.distanceTo(pl.p)>600||tmp.copy(lock.p).sub(pl.p).normalize().dot(fwd)<.8))lock=null;
+ if(!lock){let bd2=.95;for(const e of en){const d=e.p.distanceTo(pl.p);if(d<500){const dot=tmp.copy(e.p).sub(pl.p).normalize().dot(fwd);if(dot>bd2){bd2=dot;lock=e}}}}
+ const aimFrom=from=>(lock?lock.p.clone():cam.position.clone().addScaledVector(fwd,300)).sub(from).normalize();
+ fT-=dt;if(wantFire&&fT<=0){fT=S.rate;pl.en-=1.2;const pm_=ud.palms[pl.alt^=1];pm_.getWorldPosition(tmp);const d=aimFrom(tmp);spawnB(tmp,d,true,S.dmg);for(let i=0;i<8;i++)emit(tmp,d.clone().multiplyScalar(30+R()*30).add(V(R()-.5,R()-.5,R()-.5).multiplyScalar(20)),new THREE.Color(0x9ff4ff),.15)}
+ beam.visible=!!wantBeam;if(wantBeam){const o=pl.p.clone().addScaledVector(fwd,1.2).add(V(0,-.2,0)).add(V(0,0,0)),d=aimFrom(o);let len=450;
+  for(const e of en){const rel=e.p.clone().sub(o),t=rel.dot(d);if(t>0&&t<len&&rel.addScaledVector(d,-t).length()<e.r+1.5){dmgE(e,140*S.beam*dt);len=t}}
+  beam.position.copy(o);beam.lookAt(o.clone().add(d));beam.scale.set(1+Math.sin(T*60)*.15,1+Math.sin(T*60)*.15,len);tmp.copy(o).addScaledVector(d,len);boom(tmp,0xaef4ff,3)}
+ // bullets
+ for(let i=bul.length-1;i>=0;i--){const b=bul[i],p=b.m.position;b.l-=dt;
+  if(b.f&&lock){b.v.lerp(lock.p.clone().sub(p).normalize().multiplyScalar(340),Math.min(1,3*dt));b.m.lookAt(p.clone().add(b.v))}
+  p.addScaledVector(b.v,dt);let hit=b.l<=0||p.y<0||hitB(p);
+  if(b.f){for(const e of en)if(!e.dead&&p.distanceTo(e.p)<e.r+1){dmgE(e,b.d);hit=1;break}}else if(p.distanceTo(pl.p)<3){hurt(b.d);hit=1}
+  if(hit){boom(p,b.f?0x66e6ff:0xff7a30,10);scene.remove(b.m);bul.splice(i,1)}}
+ // enemies
+ const detect=330*S.stealth;
+ for(const e of en){if(e.dead)continue;const to=pl.p.clone().sub(e.p),d=to.length();to.divideScalar(d||1);const aware=d<detect,want=V();
+  if(aware){want.copy(to).multiplyScalar(d>e.pref?1:-.6).addScaledVector(V(-to.z,0,to.x),Math.sin(T*.7+e.ph)*.8);want.y+=(pl.p.y+(e.t=='mech'?10:0)-e.p.y)*.02}
+  else{if(e.p.distanceTo(e.w)<20)e.w.set(e.p.x+(R()-.5)*400,40+R()*120,e.p.z+(R()-.5)*400);want.copy(e.w).sub(e.p).normalize().multiplyScalar(.5)}
+  e.v.lerp(want.multiplyScalar(e.sp),1-Math.exp(-2*dt));e.p.addScaledVector(e.v,dt);
+  const b=bAt(e.p.x,e.p.z);if(b&&Math.abs(e.p.x-b.x)<b.hw+6&&Math.abs(e.p.z-b.z)<b.hd+6&&e.p.y<b.h+8)e.p.y+=50*dt;if(e.p.y<20)e.p.y=20;e.g.lookAt(pl.p);
+  if(aware&&d<280&&(e.f-=dt)<=0){e.f=e.t=='mech'?1.2:2+R()*1.5;const dir=pl.p.clone().addScaledVector(pl.v,d/90).sub(e.p).normalize();dir.x+=(R()-.5)*.05;dir.y+=(R()-.5)*.05;spawnB(e.p,dir.normalize(),false,e.t=='mech'?14:8)}
+  if(d>1100){e.dead=1;scene.remove(e.g)}}
+ en=en.filter(e=>!e.dead);spT-=dt;if(spT<=0){spT=2;if(en.filter(e=>e.t=='drone').length<12)swarm(4,'drone');if(en.filter(e=>e.t=='mech').length<3)swarm(1,'mech')}
+ // npcs
+ near=null;let nd=1e9;for(const n of NPCS){const d=n.pos.distanceTo(pl.p);if(d<nd){nd=d;if(d<32&&sp<50)near=n}}
+ const dlg=$('dlg');if(dlg.style.display=='block'&&nd>60)dlg.style.display='none';
+ $('prompt').style.display=near&&dlg.style.display!='block'?'block':'none';if(near)$('prompt').textContent='[E] Talk to '+near.n;
+ // camera + light
+ const dc=V(0,3.2,13.5).applyQuaternion(qA).add(pl.p);cam.position.lerp(dc,1-Math.exp(-10*dt));cam.lookAt(pl.p.clone().addScaledVector(fwd,40).add(V(0,1.5,0)));
+ cam.fov+=((70+(boost?16:0)+6*sp/mxs)-cam.fov)*Math.min(1,dt*4);cam.updateProjectionMatrix();
+ sun.position.copy(pl.p).add(V(180,350,120));sun.target.position.copy(pl.p);stars.position.copy(cam.position);stepP(dt);
+ // HUD
+ $('bHp').style.width=pl.hp/S.hp*100+'%';$('bSh').style.width=pl.sh/S.sh*100+'%';$('bEn').style.width=pl.en+'%';
+ $('status').textContent=pl.over?'ENERGY DEPLETED':wantBeam?'UNIBEAM ACTIVE':boost?'AFTERBURNER':lock?'TARGET LOCKED':'SYSTEMS NOMINAL';
+ $('cr').textContent='CREDITS '+pl.credits;
+ $('telem').innerHTML=`POS ${pl.p.x|0}, ${pl.p.z|0}<br>ALT ${pl.p.y|0} m<br>SPD ${sp|0} m/s<br>HDG ${((-pl.yaw*57.3%360+360)%360)|0}&deg;`;
+ $('quest').innerHTML=quest?`<b class="text-amber-300">BOUNTY: ${quest.type}s ${quest.have}/${quest.need}</b><br>${quest.done?'Return to '+quest.giver.n:'Reward '+quest.rew+' credits'}<br>`:'<b class="text-amber-300">NO ACTIVE BOUNTY</b><br>Land near a gold beacon on a rooftop.<br>';
+ $('quest').innerHTML+=`Nearest contact ${nd|0} m`;
+ brk.forEach((d,i)=>{const e=en[i];if(!e){d.style.display='none';return}const p=e.p.clone().project(cam);if(p.z>1||Math.abs(p.x)>1.1||Math.abs(p.y)>1.1){d.style.display='none';return}
+  const L=e===lock;d.style.display='block';d.style.left=(p.x+1)/2*innerWidth+'px';d.style.top=(1-p.y)/2*innerHeight+'px';const w=L?46:26;d.style.width=d.style.height=w+'px';
+  d.style.borderColor=L?'#ff2a2a':'rgba(255,120,120,.6)';d.style.borderWidth=L?'2px':'1px';d.textContent=L?(e.p.distanceTo(pl.p)|0)+'m':''});
+ renderer.render(scene,cam)}
+</script></body></html>
